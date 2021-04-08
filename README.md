@@ -1,5 +1,5 @@
 # pycdb
-Read in .cdb files with python.
+Read in ansys .cdb files with python.
 
 Only support part of the key words.
 
