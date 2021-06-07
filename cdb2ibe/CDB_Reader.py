@@ -48,12 +48,25 @@ class cdbReader():
         key = node.nid
         assert key > 0, 'nid=%s node=%s' % (key, node)
         self.nodes[key] = node
-        self._type_to_id_map[node.type].append(key)
+        #self._type_to_id_map[node.type].append(key)
         
     def _add_element_object(self, elem):
         key = elem.eid
+        etype = self.etypes[elem.etid].etype
+        # separate orientation node
+        if etype == "Beam2":
+            if elem.nnode == 3:
+                elem.onid = elem.nids[-1]
+                elem.nids = elem.nids[:-1]
+            assert len(elem.nids) == 2, key
+        elif etype == "Beam3":
+            if elem.nnode == 4:
+                elem.onid = elem.nids[-1]
+                elem.nids = elem.nids[:-1]
+            assert len(elem.nids) == 3, key
+        # TODO:change the ibemesh & ibeset parts
         self.elements[key] = elem
-        self._type_to_id_map[elem.type].append(key)
+        self._type_to_id_map[etype].append(key)
         
     def _add_set_object(self, setCM):
         key = setCM.sid
@@ -95,6 +108,13 @@ class cdbReader():
         for line in lines:
             cKey = line.split(',')[0].upper().strip()
             line = line.rstrip()
+            
+            # remove annotation and blank lines
+            if line == "":
+                continue
+            if cKey[0] == "!":
+                continue
+            
             if cKey == "NBLOCK":
                 flag = 1
             elif cKey == "EBLOCK":
@@ -121,8 +141,7 @@ class cdbReader():
             elif flag == 4:
                 rlBlock.append(line)
             elif flag == -1:
-                if line != '':
-                    restBlocks.append(line)
+                restBlocks.append(line)
         
         return nBlock, eBlock, cmBlock, rlBlock, restBlocks
     
@@ -142,10 +161,15 @@ class cdbReader():
             num = ff[1]
             length = ff[2]
             for i in range(num):
-                value = line[i*length:(i+1)*length]
+                value = line[i*length:(i+1)*length].strip()
                 if value == '':
                     value = '0'
-                fields.append(eval(tp)(value))
+                # !!! eval is very time-consuming, avoid using it !!!
+                # fields.append(eval(tp)(value))
+                if tp == "int":
+                    fields.append(int(value))
+                elif tp == "float":
+                    fields.append(float(value))
             line = line[num*length:]
         return fields
     
@@ -193,7 +217,10 @@ class cdbReader():
         # parse nBlock to get node info
         line1 = self.splitLine(nBlock[0])
         assert line1[2] == "SOLID", line1
-        print("Number of nodes: " + line1[4])
+        try:
+            print("Number of nodes: " + line1[4])
+        except:
+            pass
         
         # get format
         ft = self.parseFormat(nBlock[1])
@@ -204,13 +231,16 @@ class cdbReader():
             fields = self.splitLineFt(ft, line)
             self.parseCard(label, fields)
             n += 1
-        assert n == int(line1[4]), n
+        #assert n == int(line1[4]), n
     
     def parseEB(self, eBlock):
         # parse eBlock to get element info
         line1 = self.splitLine(eBlock[0])
         assert line1[2] == "SOLID", line1
-        print("Number of elements: " + line1[4])
+        try:
+            print("Number of elements: " + line1[4])
+        except:
+            pass
         
         # get format
         ft = self.parseFormat(eBlock[1])
@@ -233,7 +263,7 @@ class cdbReader():
             else:
                 fields += self.splitLineFt(ft, line)
                 nl -= 1
-        assert n == int(line1[4]), n
+        #assert n == int(line1[4]), n
                 
     def parseSingleCMB(self, cmBlock, sid):
         # parse a single cmBlock
@@ -262,7 +292,7 @@ class cdbReader():
             self.parseSingleCMB(cmBlock[idList[i]:idList[i+1]], i+1)
     
     def parseRLB(self, rlBlock):
-        # parse rlBlock to get real constant set info
+        # parse rlBlock to get real constant set info (what is the use???)
         if rlBlock == []:
             return
         line1 = self.splitLine(rlBlock[0])
@@ -367,10 +397,11 @@ class cdbReader():
         nBlock, eBlock, cmBlock, rlBlock, restBlocks = self.linesDivision(lines)
         print("========== Reading cdb file...")
         self.parseNB(nBlock)
-        self.parseEB(eBlock)
         self.parseCMB(cmBlock)
         self.parseRLB(rlBlock)    
         self.parseRB(restBlocks)
+        # put parseEB in the end to get their etypes
+        self.parseEB(eBlock)
         
         # deal with some special cases
         self.combineConstraint()

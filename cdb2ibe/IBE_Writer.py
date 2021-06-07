@@ -4,11 +4,13 @@ import numpy as np
 import warnings
 import IBE
 
+from cdb2ibe.ibe.ibeinitial import importinitial
 from cdb2ibe.ibe.ibemesh import importMesh
 from cdb2ibe.ibe.ibesets import importSet
 from cdb2ibe.ibe.ibematerials import importMat
 from cdb2ibe.ibe.ibeconstraints import importConstraint
 from cdb2ibe.ibe.ibeproperties import importSection
+from cdb2ibe.ibe.ibecontacts import importContact, importSpring
 
 class ibeWriter():
     def __init__(self, cdbPath, model):
@@ -24,32 +26,35 @@ class ibeWriter():
             IBE.ActiveDocument = doc
         
         print("========== Writing to Simdroid...")
-        #self.baseCoord()
-        self.createSetObj()
-        self.createSecObj()
-        
-        nidsMap, eidsMap = importMesh(self.model)
-        importSet(self.model, nidsMap, eidsMap)
-        importMat(self.model)
-        importSection(self.model)
+        # add initial tree nodes
+        importinitial()
 
+        nidsMap, eidsMap = importMesh(self.model)
+
+        sets = importSet(self.model, nidsMap, eidsMap)
+
+        importMat(self.model, sets)
+
+        importSection(self.model, sets, eidsMap)
+
+        importContact(self.model, sets)
+
+        importConstraint(self.model, sets)
+
+        #importSpring(self.model, nidsMap)
+        
+        self.addFreq()
+        
         print("========== Cdb import finished.")
         
-    def baseCoord(self):
-        BaseCoordinate = IBE.ActiveDocument.addObject("Definition::Coordinate", "Base", "Base")
-        BaseCoordinate.CoordinateType = "Cartesian"
-        BaseCoordinate.v1 = IBE.Vector(1.0, 0.0, 0.0)
-        BaseCoordinate.v2 = IBE.Vector(0.0, 1.0, 0.0)
-        IBE.ActiveDocument.Definition.addObject(BaseCoordinate)
+    def addFreq(self):
+        # add frequency analysis
+        obj = IBE.ActiveDocument.addObject("Fem::MonitorGroup", "MonitorGroup")
+        obj.Label = "监控"
         
-    def createSetObj(self):
-        # create set object
-        obj = IBE.ActiveDocument.addObject("Part::Objects", "Objects")
-        obj.Label = "对象"
-        IBE.ActiveDocument.getObject("Definition").Group += [obj]
-        
-    def createSecObj(self):
-        # create section object
-        obj = IBE.ActiveDocument.addObject("Part::SectionGroup", "Sections")
-        obj.Label = "截面"
-        IBE.ActiveDocument.getObject("Definition").Group += [obj]
+        obj = IBE.ActiveDocument.addObject("Structure::FrequencyJob", "JobSetting")
+        IBE.ActiveDocument.Structural.Group += [obj]
+        obj.Label = "step-1 : 频率分析"
+        obj.ModeNumber = 20
+        obj.Method = 1
+    

@@ -1,5 +1,6 @@
 import numpy as np
 from collections import defaultdict
+import warnings
 
 from cdb2ibe.cards.utils import transfer
 
@@ -10,6 +11,7 @@ class SECTION():
     def __init__(self, secid=-1, sectype=None, props={}):
         self.secid = secid
         self.sectype = sectype
+        # props
         self.props = props
 
     @classmethod
@@ -27,7 +29,7 @@ class SECTION():
             else:
                 line.append(s)
         data[oldKey].append(line)
-        # data: list of list [[], [], []]
+        # data: {key: list of list [[], [], []], ...}
         
         secid, sectype, props = cls().parseSec(data)
         return SECTION(secid, sectype, props)
@@ -39,7 +41,10 @@ class SECTION():
         props = {}
         secid = int(data["SECTYPE"][0][0])
         sectype = data["SECTYPE"][0][1]
-        subtype = data["SECTYPE"][0][2]
+        try:
+            subtype = data["SECTYPE"][0][2]
+        except:
+            subtype = None
         try:
             name = data["SECTYPE"][0][3]
         except:
@@ -54,6 +59,10 @@ class SECTION():
             self.parseShell(data, props)
         elif sectype in {"REIN", "REINF"}:
             self.parseRein(data, props)
+        elif sectype == "LINK":
+            self.parseTruss(data, props)
+        else:
+            warnings.warn("Section Type {} unsupported!".format(sectype))
         
         return secid, sectype, props
     
@@ -66,22 +75,31 @@ class SECTION():
             props["offsetyz"] = [float(data["SECOFFSET"][0][1]),float(data["SECOFFSET"][0][2])]
         props["control"] = [float(v) for v in data["SECCONTROL"][0][:4]]
         
+    def parseTruss(self, data, props):
+        # geometry for truss section
+        # only area is obtained
+        props["area"] = float(data["SECDATA"][0][0])
+        
     def parseShell(self, data, props):
-        # offset: "TOP", "MID"(default), "BOT", "USER"
-        props["offset"] = data["SECOFFSET"][0][0]
-        if props["offset"] == "USER":
-            props["offsetx"] = float(data["SECOFFSET"][0][1])
-        
-        sblock = data["SECBLOCK"][0]
-        nlayer = int(sblock[0])
-        layers = []
-        for i in range(nlayer):
-            # for each layer: thickness, mid, layer orientation angle, num of integration points
-            layers.append([float(sblock[4*i+1]), int(sblock[4*i+2]),
-                           float(sblock[4*i+3]), int(sblock[4*i+4])])
-        props["layers"] = layers
-        
-        props["control"] = [float(v) for v in data["SECCONTROL"][0][:8]]
+        try:
+            # offset: "TOP", "MID"(default), "BOT", "USER"
+            props["offset"] = data["SECOFFSET"][0][0]
+            if props["offset"] == "USER":
+                props["offsetx"] = float(data["SECOFFSET"][0][1])
+
+            sblock = data["SECBLOCK"][0]
+            nlayer = int(sblock[0])
+            layers = []
+            for i in range(nlayer):
+                # for each layer: thickness, mid, layer orientation angle, num of integration points
+                layers.append([float(sblock[4*i+1]), int(sblock[4*i+2]),
+                               float(sblock[4*i+3]), int(sblock[4*i+4])])
+            props["layers"] = layers
+        except:
+            props["offset"] = "MID"
+            props["layers"] = [[float(v) for v in data["SECDATA"][0]]]
+
+        props["control"] = [float(v) if v else 0 for v in data["SECCONTROL"][0]]
         
     def parseRein(self, data, props):
         # parse a reinforcing section

@@ -6,7 +6,7 @@ class ELEMENT():
     type = 'ELEMENT'  
     
     def __init__(self, mid, etid, rc, secid, cid,
-                 bd, smid, eshape, nnode, eid, nids):
+                 bd, smid, eshape, nnode, eid, nids, onid=None):
         self.mid = mid # material id
         self.etid = etid # element type local id
         self.rc = rc # real constant number id
@@ -17,7 +17,8 @@ class ELEMENT():
         self.eshape = eshape # element shape flag
         self.nnode = nnode # number of nodes
         self.eid = eid # element id !!
-        self.nids = nids # node ids of this element      
+        self.nids = nids # list of node ids of this element
+        self.onid = onid # orientation node id for beam2, beam3, ...      
         
     @classmethod
     def add_card(cls, card):
@@ -51,6 +52,9 @@ class ETYPE():
             0: {0: "Hex20R"},
             2: {0: "Hex20R", 1: "Hex20"},
         },
+        "187": {
+            0: {0: "Tet10"},
+        },
         "190":{
             0: {0: "SolidShell8"},
         },
@@ -72,25 +76,34 @@ class ETYPE():
         },
     }
     
-    def __init__(self, etid=-1, etype="Hex"):
+    def __init__(self, etid=-1, etype="Hex", keyopts = []):
         self.etid = etid
+        # for all special elements which are not included in Simdroid mesh tree,
+        # their names (etype) should be digital values like "170"
         self.etype = etype
+        # keyopts: [[2,2], [3,2], ...]
+        # for special element types like contact, spring...
+        self.keyopts = keyopts
         
     def getEType(self, ename, keys):
         # get the specific type of element
-        # keys = ["KEYOP", 1, 2, 2, "KEYOP", 1, 3, ...]
-        # cannot deal with multiple KEYOPs currently!!!
+        # keys = [[2,2], [3,2], ...]
+        # each list corresponds to a keyopt line in keys
+        # cannot deal with multiple KEYOPTs for ordinary element types!!!
         if keys == []:
             # default type
             key1, key2 = 0, 0
         else:
-            key1, key2 = int(keys[2]), int(keys[3])
+            key1, key2 = int(keys[0][0]), int(keys[0][1])
         try:
             etype = self.key2etype[ename][key1][key2]
+            assert len(keys) <= 1
         except KeyError:
-            warnings.warn("Element type {} unrecognized!".format(ename))
-            # MESH200 is auxiliary element.
-            etype = ename    
+            etype = ename
+            if ename not in {"170", "173", "174", "175", "14"}:
+                # MESH200 is auxiliary element.
+                warnings.warn("Element type {} unrecognized!".format(ename))
+                
         return etype       
 
     @classmethod
@@ -101,14 +114,15 @@ class ETYPE():
         etid = int(card[1])
         ename = card[2] # str
         
-        if "KEYOPT" in card:
-            index = card.index("KEYOPT")
+        keys = []
+        index = 0
+        while "KEYOPT" in card[index:]:
+            index = card.index("KEYOPT", index)
             ketid = int(card[index+1])
             assert ketid == etid, (ketid, etid)
-            keys = card[index:]
-        else:
-            keys = [] # default type
+            keys.append([int(card[index+2]), int(card[index+3])])
+            index += 1
         
         etype = cls().getEType(ename, keys)
         
-        return ETYPE(etid, etype)
+        return ETYPE(etid, etype, keys)

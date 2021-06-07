@@ -28,7 +28,9 @@ class RCSET():
     type = 'RCSET'
     
     def __init__(self, rcsid, num, reals):
+        # real constant set id
         self.rcsid = rcsid
+        # number of reals
         self.num = num
         self.reals = reals
         

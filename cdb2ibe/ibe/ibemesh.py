@@ -1,42 +1,69 @@
 import IBE, IBEGui, Fem
 from collections import defaultdict
 import warnings
+import time
 import numpy as np
+
+# parsable element types in Simdroid
+element_types = {"Hex8", "Hex8R", "Hex8ICR", "SolidShell8", "Hex8Fluid", 
+                "Hex20", "Hex20R", "Tet4", "Tet10",
+                "MITC4",
+                "Beam2", "Truss2", "Beam3",}
 
 def importMesh(model):
     # import mesh nodes to simdroid
     # sameType: 1(each type of element has a mesh node)/0(all elements in one mesh node)
+    # element types with different dimensions are not allowed in a single mesh node currently in Simdroid!!!
+    # thus sameType = 0 is not recommended.
     sameType = 1
     if sameType:
         eleDict = eleSplit(model)
     else:
-        eids = []
-        for eid in model.elements:
-            eids.append(eid)
-        eleDict = {"allmesh": eids}
-        
+        # only import legal elements
+        eleDict = eleSplit(model)
+        eids = set()
+        for typeEids in eleDict.values():
+            eids = eids | set(typeEids)
+        eleDict = {"allmesh": list(eids)}
+
     num = 1
     mesh = []
-    for eids in eleDict.values():
+    for _, eids in eleDict.items():
         meshAttr = createMesh(eids, model, num, sameType)
         if meshAttr:
             mesh.append(meshAttr)
             num += 1
     # mesh: [(nids, eids), (nids, eids)]
     # build mapping from global nid/eid to local (meshObjIndex, localID)
-    # eg. nidsMap = {2: (0, 1), 4:,,,}
+    # meshObjIndex should start from 1 thus (i+1)
+    ##################
+    #### Attention ###
+    ##################
+    # One nid may corresponds to several meshObjIndex for sharing nodes!!!
+    # eg. eidsMap = {2: [0, 1], 4:,,,}
+    # eg. for shared node 10: [1, 11, 3, 23] which means this node 10 is shared by 2
+    # mesh nodes 1 and 3, with their local nids 11 and 23 respectively.
+    
+    shareNodes = []
     nidsMap = {}
     eidsMap = {}
     for i,meshTuple in enumerate(mesh):
         nids, eids = meshTuple[0], meshTuple[1]
-        for j,nid in enumerate(nids):
-            if j>0:
-                nidsMap[nid] = (i, j)
-        for j,eid in enumerate(eids):
-            if j>0:
-                eidsMap[eid] = (i, j)
+        for j,nid in enumerate(nids[1:]):
+            if nid in nidsMap:
+                # shared nodes
+                nidsMap[nid] += [i+1, j+1]
+                shareNodes.append(nid)
+            else:
+                nidsMap[nid] = [i+1, j+1]
+        for j,eid in enumerate(eids[1:]):
+            eidsMap[eid] = [i+1, j+1]
+            
+    # add shared nodes info
+    addShare(shareNodes, nidsMap)    
     
     IBEGui.SendMsgToActiveView("ViewFit")
+    
     return nidsMap, eidsMap
         
 def eleSplit(model):
@@ -45,8 +72,28 @@ def eleSplit(model):
     for eid, element in model.elements.items():
         etid = element.etid
         etype = model.etypes[etid].etype
-        eleDict[etype].append(eid)
+        if etype in element_types:
+            eleDict[etype].append(eid)
     return eleDict
+
+def addShare(shareNodes, nidsMap):
+    shareNodes = list(set(shareNodes))
+    # shareDict: {meshId: [[1, 11, meshId, 23], []]}
+    # each item contains all the shared nodes of this mesh node
+    shareDict = defaultdict(list)
+    for nid in shareNodes:
+        # assure one node is only shared by two mesh nodes
+        # eg. mapIndex = [1, 11, 3, 23]
+        mapIndex = nidsMap[nid]
+        assert len(mapIndex) == 4, nid
+        # mapIndex[-2] refers to the largest mesh node index for this node
+        shareDict[mapIndex[-2]].append(mapIndex)
+    for meshId, mapIndexes in shareDict.items():
+        getMeshObj(meshId).MatchNodes = [(getMeshObj(mapIndex[0]), mapIndex[1], mapIndex[-1]) for mapIndex in mapIndexes]
+        
+def getMeshObj(meshId):
+    # this is based on the assumption that mesh node is named after "mesh+id"!!!
+    return IBE.ActiveDocument.getObject("mesh"+str(meshId))
            
 def createMesh(eids, model, num, sameType=0):
     # create a single mesh node given global eids list
@@ -63,39 +110,46 @@ def createMesh(eids, model, num, sameType=0):
     for eid in eids[1:]:
         element = model.elements[eid]
         nids += element.nids
-    nids = list(np.unique(nids))
+    # !!! change np.unique() to set() greatly reduces the computation time when using .index()!!!
+    # nids = list(np.unique(nids))
+    nids = list(set(nids))
     nids.sort()
-    nids = [-1] + nids
-    
+    nids = [-1] + nids  
     mesh = Fem.FemMesh()
     
+    # build dict rather than using index to save time !!!
+    nidsNew = {}
+    for i, nid in enumerate(nids[1:]):
+        nidsNew[nid] = i+1
+    eidsNew = {}
+    for i, eid in enumerate(eids[1:]):
+        eidsNew[eid] = i+1
+
     for nid in nids[1:]:
         xyz = model.nodes[nid].xyz
-        mesh.addNode(xyz[0], xyz[1], xyz[2], nids.index(nid))
-    
+        #mesh.addNode(xyz[0], xyz[1], xyz[2], nids.index(nid))
+        mesh.addNode(xyz[0], xyz[1], xyz[2], nidsNew[nid])
+
     etypes = []
     for eid in eids[1:]:
+        
         element = model.elements[eid]
         etid = element.etid
         etype = model.etypes[etid].etype
         etypes.append(etype)
-        
-        eidLocal = eids.index(eid)
+
+        #eidLocal = eids.index(eid)
+        eidLocal = eidsNew[eid]
         nidsLocal = []
         n = []
         for nid in element.nids:
-            n.append(nids.index(nid))
+            #n.append(nids.index(nid))
+            n.append(nidsNew[nid])
         # add solid
-        if etype in {"Hex8", "Hex8R", "Hex8ICR", "SolidShell8", "Hex8Fluid"}:
-            nidsLocal = [n[5], n[6], n[7], n[4], n[1], n[2], n[3], n[0]]
-        elif etype in {"Hex20", "Hex20R"}:
-            nidsLocal = [n[5], n[6], n[7], n[4], n[1], n[2], n[3], n[0],
-                    n[13], n[14], n[15], n[12], n[9], n[10], n[11],
-                    n[8], n[17], n[18], n[19], n[16]]
-        elif etype in {"Tet4"}:
-            nidsLocal = [n[1], n[0], n[2], n[3]]
-        elif etype in {"Tet10"}:
-            nidsLocal = [n[1], n[0], n[2], n[3], n[4], n[6], n[5], n[8], n[7], n[9]]
+        if etype in {"Hex8", "Hex8R", "Hex8ICR", "SolidShell8", "Hex8Fluid", 
+                     "Hex20", "Hex20R",
+                     "Tet4", "Tet10",}:
+            nidsLocal = n
         if nidsLocal:
             mesh.addVolume(nidsLocal, eidLocal)
             continue
@@ -117,8 +171,8 @@ def createMesh(eids, model, num, sameType=0):
         if not nidsLocal:
             warnings.warn("Element type {} unsupported!".format(etype))
             if sameType:
-                return        
-    
+                return
+
     if not (mesh.EdgeCount or mesh.FaceCount or mesh.VolumeCount):
         # remove mesh nodes without elements
         return    
@@ -129,9 +183,8 @@ def createMesh(eids, model, num, sameType=0):
     else:
         meshObj.Label = "MESH"
     meshObj.FemMesh = mesh
-    meshObj.ElementTypes = etypes    
-    IBE.ActiveDocument.Mesh.addObject(meshObj)
-    
+    meshObj.ElementTypes = etypes
+
     # nids=[-1,2,5,...]; eids=[-1,4,6,9,...]
     return (nids, eids)
             

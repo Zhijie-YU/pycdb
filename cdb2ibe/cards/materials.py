@@ -41,6 +41,7 @@ class MAT():
         index = card.index("MPDATA")
         lab = card[index+3]
         mid = int(card[index+4])
+        # eg. props = {"DENS": [temp1, temp2, den1, den2]} 
         props = {lab: temp + prop}
         
         return MAT(mid, props)
